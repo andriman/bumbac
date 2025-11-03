@@ -331,6 +331,7 @@ def search(name, params=None):
 
             pot_dupl_name = t + " (" + s + " - " + m + ")"
 
+            # TODO - duplicity counting.
             if not duplicities_set.__contains__(pot_dupl_name):
                 final_title = t
                 if g_truncate_titles:
@@ -363,6 +364,8 @@ def search(name, params=None):
     xbmcplugin.setContent(_handle, 'videos')
 
     dprint('search(): found: ' + str(len(videos)))
+    videos.sort()
+
     for category in videos[:int(g_max_searched_vids)]:
         #dprint('search(): found item: ' + str(category))
         list_item = xbmcgui.ListItem(label=category[0] + category[1])
