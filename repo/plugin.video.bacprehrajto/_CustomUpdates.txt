@@ -1,0 +1,18 @@
+2025-11-01
+ - Fixed one error: Video se zpracovává
+ -
+
+
+ TODO:
+ fdt = filter_subtitles(dt)
+
+ - dodělat možnost výběru titulků
+
+
+
+- Výběr kvality? (Nejspíš se vždy vybere 720p, místo třeba 1080p)
+- Premium je zbytečné - i free uživatel může jít přes ?do=download
+-- Přidáno nastavení kvality
+
+Přidána možnost výběru streamu do kontextového menu
+Opraveno generování QR kódu
