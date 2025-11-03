@@ -35,4 +35,22 @@
             <icon>icon.png</icon>
         </assets>
     </extension>
+</addon><addon id="repository.bumbac" version="1.0.0" name="Kodi BumBac Repository" provider-name="BumBac">
+  <extension point="xbmc.addon.repository" name="Kodi BumBac Repository">
+    <dir minversion="18.9.0">
+		<info compressed="false">https://raw.githubusercontent.com/andriman/repository.bumbac/master/repo/zips/addons.xml</info>
+		<checksum>https://raw.githubusercontent.com/andriman/repository.bumbac/master/repo/zips/addons.xml.md5</checksum>
+		<datadir zip="true">https://raw.githubusercontent.com/andriman/repository.bumbac/master/repo/zips/</datadir>
+    </dir>
+  </extension>
+  <extension point="xbmc.addon.metadata">
+    <summary>Kodi BumBac Addons</summary>
+    <description>Kodi BumBac Addons</description>
+    <platform>all</platform>
+    <language>cs</language>
+    <assets>
+        <icon>icon.png</icon>
+        <fanart>fanart.jpg</fanart>
+    </assets>
+  </extension>
 </addon></addons>
