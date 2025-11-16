@@ -10,7 +10,9 @@ import hjson
 from common import subtitles_path
 from model.StreamData import StreamData
 from model.SubData import SubData
-from utils.utils import dprint, contains_pattern, find_pattern, filter_subtitles, format_time_ago
+from utils.utils import dprint, filter_subtitles
+from utils.StrUtils import contains_pattern, find_pattern, get_file_size_human_readable
+from utils.TimeUtils import format_time_ago
 
 
 def get_streams_data(gl) -> Tuple[Optional[List[StreamData]], Optional[List[SubData]]]:
@@ -22,12 +24,13 @@ def get_streams_data(gl) -> Tuple[Optional[List[StreamData]], Optional[List[SubD
     soup = BeautifulSoup(gl, 'html.parser')
     sources_pattern = re.compile('var sources = (\[.*?);', re.DOTALL)
 
+    # Find streams section.
     script_f = soup.find("script", string=sources_pattern)
 
+    dgl = gl.decode('utf-8')
     if script_f is None:
-        dgl = gl.decode('utf-8')
         if contains_pattern(dgl, r'>\s*?Video se zpracov'):
-            upload_date = find_pattern(dgl, 'Datum nahr.n.:</span>\s*?<span>([^<]+)')
+            upload_date = find_pattern(dgl, r'Datum nahr.n.:</span>\s*?<span>([^<]+)')
 
             # Výpočet kolik hodin zpět
             time_ago = format_time_ago(upload_date)
@@ -41,7 +44,7 @@ def get_streams_data(gl) -> Tuple[Optional[List[StreamData]], Optional[List[SubD
                 sound=False
             )
         else:
-            dprint(f'get_stream_data(): script not found:\n' + str(gl))
+            dprint(f'get_stream_data(): script not found:\n' + str(dgl))
 
             p_dialog.close()
             xbmcgui.Dialog().notification(
@@ -58,7 +61,27 @@ def get_streams_data(gl) -> Tuple[Optional[List[StreamData]], Optional[List[SubD
 
     stream_items: List[StreamData] = []
 
-    # Videos.
+    # Find download link.
+    download_link = find_pattern(dgl, r'href="/([^\?]+\?do=download)\" class="button cta cta--large\">\s*?<span class=\"icon-download\">')
+    if download_link:
+        # 'N.zev souboru:</span>\s*?<span>([^<]+?)</span>'
+        # 'Velikost:</span>\s*?<span>([^<]+?)</span>'
+        # 'Form.t:</span>\s*?<span>([^<]+?)</span>'
+        download_link = 'https://prehraj.to/' + download_link
+        item = StreamData(label="Premium", path=download_link)
+
+        quality = find_pattern(dgl, r'Rozli.en.:</span>\s*?<span>([^<]+?)</span>')
+        if quality is not None:
+            quality = quality.replace(' ', '')
+            height = find_pattern(quality, r'[0-9]+x([0-9]+)')
+            if height.isnumeric():
+                item.quality = int(height)
+                item.label = height + 'p'
+                item.label2 = find_pattern(dgl, r'Velikost:</span>\s*?<span>([^<]+?)</span>')
+
+        stream_items.append(item)
+
+    # Find streams.
     p_dialog.update(10, "Hledám video streamy")
     try:
         dprint(f'get_stream_data(): vidfile')
@@ -113,7 +136,6 @@ def get_streams_data(gl) -> Tuple[Optional[List[StreamData]], Optional[List[SubD
 
     for sdata in filtered_sub_data:
         sfile_path = subtitles_path + sdata.label + '.txt'
-        dprint(f'Sub: ' + sfile_path)
         with open(sfile_path, "w+", encoding="utf-8") as f:
             f.write(sdata.path)
             f.close()

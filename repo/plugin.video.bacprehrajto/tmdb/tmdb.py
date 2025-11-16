@@ -8,7 +8,6 @@ import xbmcgui
 import xbmcplugin
 
 from utils.utils import get_url
-from common import gid, language
 from utils.utils import dprint
 from datetime import datetime
 
@@ -617,3 +616,7 @@ def serie_category(_handle, _url):
         url = get_url(_url, action=category[1], name=category[2], type=category[3])
         xbmcplugin.addDirectoryItem(_handle, url, list_item, True)
     xbmcplugin.endOfDirectory(_handle)
+
+
+gid = {28: "Akční", 12: "Dobrodružný", 16: "Animovaný", 35: "Komedie", 80: "Krimi", 99: "Dokumentární", 18: "Drama", 10751: "Rodinný", 14: "Fantasy", 36: "Historický", 27: "Horor", 10402: "Hudební", 9648: "Mysteriózní", 10749: "Romantický", 878: "Vědeckofantastický", 10770: "Televizní film", 53: "Thriller", 10752: "Válečný", 37: "Western", 10759: "Action & Adventure", 10751: "Rodinný", 10762: "Kids", 9648: "Mysteriózní", 10763: "News", 10764: "Reality", 10765: "Sci-Fi & Fantasy", 10766: "Soap", 10767: "Talk", 10768: "War & Politics"}
+language = "en-US"

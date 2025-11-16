@@ -5,7 +5,7 @@ import os
 import sys
 import time
 from typing import List, Optional, Tuple
-from urllib.parse import quote, parse_qsl, unquote
+from urllib.parse import parse_qsl, unquote
 from urllib.parse import urlparse
 from urllib.request import urlopen
 
@@ -18,22 +18,29 @@ import xbmcplugin
 import xbmcvfs
 from bs4 import BeautifulSoup
 
-from common import _ADDON_ID, addon, g_max_searched_vids, g_truncate_titles, g_download_path, g_quality_selector, \
+from common import _ADDON_ID, addon, g_max_searched_vids, g_download_path, g_quality_selector, \
     history_path, \
     headers, cache_path
+from model.QS import QS
 from model.StreamData import StreamData
 from model.SubData import SubData
-from providers.prehrajto.get_stream_data import get_streams_data
-from tmdb.tmdb import tmdb_episodes, tmdb_seasons, tmdb_serie, tmdb_movie, tmdb_serie_genre, tmdb_movie_genre, \
-    genres_category, tmdb_year, years_category, search_tmdb, movie_category, serie_category
+from modules.SplitSelectorDialog import search_variants_dialog
+from providers.Prehrajto import Prehrajto
+from tmdb.tmdb_router import tmdb_router
+from unidecode.unidecode import unidecode
 from utils.ClipboardUtils import ClipboardUtils
-from utils.utils import truncate_middle, notify_file_size, dprint, \
-    convert_size, urlencode, find_pattern, find_pattern_groups, format_eta_and_finish
+from utils.StrUtils import truncate_middle, find_pattern, find_pattern_groups, convert_size, \
+    get_file_size_human_readable
+from utils.TimeUtils import format_eta_and_finish
+from utils.utils import notify_file_size, dprint, \
+    urlencode, get_quality_icon
 
 _url = sys.argv[0]
 _handle = int(sys.argv[1])
 
 _last_page_content = None
+
+_provider = Prehrajto()
 
 
 def get_url(**kwargs):
@@ -97,33 +104,48 @@ def get_premium():
 #
 #     xbmcplugin.setResolvedUrl(_handle, True, listitem)
 
-def get_premium_link(link):
-    link = "https://prehraj.to" + urlparse(link).path
-    res = requests.get(link + "?do=download", headers=headers, allow_redirects=False)
+def get_premium_link(link) -> Optional[str]:
+    nlink = "https://prehraj.to" + urlparse(link).path + "?do=download"
+    res = requests.get(nlink, headers=headers, allow_redirects=False)
+
+    if not res.headers.keys().__contains__('Location') or res.headers['Location'] is None:
+        dprint(f'get_premium_link():\n nlink: '+ nlink+
+               '\nlink: '+ link +
+               '\nLocation is None'
+               )
+
     return res.headers['Location']
 
+def play_video(link, force_selector=False, force_quality = None):
+    dprint(
+        f'play_video(): force_selector: ' + str(force_selector) +
+           ', quality_selector = ' + str(g_quality_selector) +
+            ', force_selector = ' + str(force_selector) +
+            ', force_quality = ' + str(force_quality)
+    )
 
-def play_video(link, force_selector=False):
-    dprint(f'play_video(): force_selector: ' + str(force_selector) + ', quality_selector = 0')
-
-    if g_quality_selector == "1" and force_selector == False:  # Premium.
+    if force_quality == QS.Max or (g_quality_selector == QS.Max and force_selector == False):  # Premium.
         file = get_premium_link(link)
+        dprint("play_video(): premium link: " + file)
         notify_file_size(file)
         listitem = xbmcgui.ListItem(path=file)
         # Subtitles skipped. Premium should have them inside the file.
 
         xbmcplugin.setResolvedUrl(_handle, True, listitem)
     else:
-        data = urlparse(link)
-        content = requests.get("https://prehraj.to" + data.path, headers=headers).content
+        res = requests.get(link, headers=headers, allow_redirects=True)
+        content = res.content
+        link = res.url
 
         streams: Optional[List[StreamData]]
         subs: Optional[List[SubData]]
-        streams, subs = get_streams_data(content)
+        streams, subs = _provider.get_streams_data(content)
         if streams is None or len(streams) == 0:
+            # Streams unavailable, but premium link might still be available.
+            play_video(link, force_quality=QS.Max)
             return
 
-        if g_quality_selector == "0" and force_selector == False:  # Max Compressed
+        if g_quality_selector == QS.BestCompressed and force_selector == False:  # Max Compressed
 
             # Find the highest quality stream (compressed)
             file = streams[0].path
@@ -148,8 +170,8 @@ def play_video(link, force_selector=False):
             # listitem.setInfo('video', video_info)
 
             xbmcplugin.setResolvedUrl(_handle, True, listitem)
-        elif g_quality_selector == "2" or force_selector:  # Selector
-            selected_file, is_premium = open_stream_selector(link, streams)
+        elif g_quality_selector == QS.Selector or force_selector:  # Selector
+            selected_file, is_premium = open_stream_selector(streams)
 
             if selected_file is None:
                 # Canceled.
@@ -157,45 +179,41 @@ def play_video(link, force_selector=False):
 
             notify_file_size(selected_file)
 
+            dprint("SELECTED: " + str(is_premium))
+            dprint("SELECTED: " + selected_file)
+
             listitem = xbmcgui.ListItem(path=selected_file)
 
-            if not is_premium:
-                # Subtitles only for non-premium link.
-                name_wo_ext: Optional[str] = None
-                extension: Optional[str] = None
-                name_wo_ext, extension = get_name_ext(selected_file, content)
+            name_wo_ext, extension = get_name_ext(selected_file, content)
 
-                sub_paths = download_subtitles(subs, name_wo_ext, True, cache_path)
+            sub_paths = download_subtitles(subs, name_wo_ext, True, cache_path)
 
-                if sub_paths is not None:
-                    subtitles = [item for item in sub_paths]
-                    listitem.setSubtitles(subtitles)
+            if sub_paths is not None:
+                subtitles = [item for item in sub_paths]
+                listitem.setSubtitles(subtitles)
 
             xbmcplugin.setResolvedUrl(_handle, True, listitem)
 
 
+def create_premium_link(link) -> str:
+    return "https://prehraj.to" + urlparse(link).path + "?do=download"
+
 # Returns:
 # str = file path
 # bool = is_premium?
-def open_stream_selector(link, streams) -> Tuple[Optional[str], bool]:
-    # Insert premium link.
-    premium_link = "https://prehraj.to" + urlparse(link).path + "?do=download"
-    streams.insert(
-        0,
-        StreamData(
-            label="Premium (Nejvyšší kvalita = Nejvyšší staž. data)",
-            quality=0,
-            path=premium_link
-        )
-    )
-
+def open_stream_selector(streams) -> Tuple[Optional[str], bool]:
     # Open selector.
-    label_list = [item.label for item in streams]
+    list_items = []
+    for stream in streams:
+        item = xbmcgui.ListItem(label=stream.label, label2=stream.label2)
+        icon = get_quality_icon(stream.quality)
+        item.setArt({'thumb': icon})
+        list_items.append(item)
+
     selected = xbmcgui.Dialog().select(
         heading="Vybrat kvalitu",
-        list=label_list,
-        # preselect=
-        # useDetails=True,
+        list=list_items,
+        useDetails=True,
     )
 
     if selected == -1:
@@ -207,7 +225,7 @@ def open_stream_selector(link, streams) -> Tuple[Optional[str], bool]:
 def play_video_premium(link, cookies):
     link = "https://prehraj.to" + urlparse(link).path
     url = requests.get(link, cookies=cookies).content
-    file, sub = get_streams_data(url)
+    file, sub = _provider.get_streams_data(url)
 
     res = requests.get(link + "?do=download", cookies=cookies, headers=headers, allow_redirects=False)
     file = res.headers['Location']
@@ -222,7 +240,6 @@ def play_video_premium(link, cookies):
 
     xbmcplugin.setResolvedUrl(_handle, True, listitem)
 
-
 def history():
     name_list = open(history_path, "r", encoding="utf-8").read().splitlines()
     for category in name_list:
@@ -230,18 +247,6 @@ def history():
         url = get_url(action='listing_search', name=category)
         xbmcplugin.addDirectoryItem(_handle, url, list_item, True)
     xbmcplugin.endOfDirectory(_handle)
-
-
-# Expecting 01:54:22 or 00:54:41
-def crop_time(time_str: str) -> str:
-    if len(time_str) != 8:
-        return time_str
-
-    split_time = time_str.split(':')
-    if split_time[0] != "00":
-        return time_str
-
-    return split_time[1] + ':' + split_time[2]
 
 def search(name, params=None):
     if name == "None":
@@ -257,12 +262,13 @@ def search(name, params=None):
 
     dprint(f'Search(): ' + q)
 
+    ## Save to history
     if os.path.exists(history_path):
         lh = open(history_path, "r").read().splitlines()
         if q not in lh:
             if len(lh) == 10:
                 del lh[-1]
-            lh.insert(0, q)
+            lh.insert(0, unidecode(q))
             f = open(history_path, "w")
             for item in lh:
                 f.write("%s\n" % item)
@@ -272,103 +278,22 @@ def search(name, params=None):
         f.write(q)
         f.close()
 
-    max_pages_to_browse = 5
-    p = 1
-    videos = []
-    duplicities_set = []
-    premium = 0
+    videos = _provider.search(q)
 
-    p_dialog_step = int(100 / g_max_searched_vids)
-    p_dialog = xbmcgui.DialogProgress()
-    p_dialog.create("Přehraj.to", "Hledám video soubory...")
-    p_dialog.update(
-        int(len(videos) * p_dialog_step),
-        "Strana:         " + str(p) + "\n"
-        "Video souborů:  " + str(len(videos)) + "\n"
-    )
-
-    if addon.getSetting("email") and len(addon.getSetting("email")) > 0:
-        premium, cookies = get_premium()
-
-    stop_searching = False
-    while not (stop_searching or p_dialog.iscanceled()):
-        dprint('search(): processing page: ' + str(p))
-
-        if p > 1:
-            xbmc.Monitor().waitForAbort(3)
-
-        if premium == 1:
-            html = requests.get('https://prehraj.to:443/hledej/' + quote(q) + '?vp-page=' + str(p),
-                                cookies=cookies).content
-        else:
-            html = requests.get('https://prehraj.to:443/hledej/' + quote(q) + '?vp-page=' + str(p)).content
-
-        p_dialog.update(
-            int(len(videos) * p_dialog_step),
-            "Strana:         " + str(p) + "\n"
-            "Video souborů:  " + str(len(videos)) + "\n"
-        )
-
-        soup = BeautifulSoup(html, "html.parser")
-        title = soup.find_all('h3', attrs={'class': 'video__title'})
-        size = soup.find_all('div', attrs={'class': 'video__tag--size'})
-        time = soup.find_all('div', attrs={'class': 'video__tag--time'})
-        link = soup.find_all('a', {'class': 'video--link'})
-        # next = soup.find_all('div',{'class': 'pagination-more'})
-        next = soup.find_all('a', {'title': 'Zobrazit další'})
-
-        dprint('search(): titles: ' + str(title))
-
-        for t, s, l, m in zip(title, size, link, time):
-
-            if t is None:
-                dprint('search(): Fuckup..')
-                continue
-
-            t = t.text.strip()
-            s = s.text.strip()
-            m = crop_time(m.text.strip())
-
-            pot_dupl_name = t + " (" + s + " - " + m + ")"
-
-            # TODO - duplicity counting.
-            if not duplicities_set.__contains__(pot_dupl_name):
-                final_title = t
-                if g_truncate_titles:
-                    final_title = truncate_middle(final_title)
-
-                dprint('search(): final title: ' + final_title)
-                videos.append(
-                    (
-                        final_title,
-                        ' (' + s + " - " + m + ')',
-                        'https://prehraj.to:443' + l['href'],
-                        t
-                    )
-                )
-
-                duplicities_set.append(pot_dupl_name)
-            else:
-                dprint('search(): duplicity: ' + pot_dupl_name)
-
-        p = p + 1
-
-        stop_searching = next == [] or len(videos) >= int(g_max_searched_vids) or p == max_pages_to_browse
-
-    p_dialog.close()
     if not videos:
-        xbmcgui.Dialog().notification("Přehraj.to", "Nenalezeno:\r\n" + q, xbmcgui.NOTIFICATION_INFO, 4000, sound=False)
-        # TODO - possibly let user change the searched string.
+        # Not found. Search Variants.
+        new_search = search_variants_dialog(name)
+        if new_search is not None:
+            search(new_search, params)
+
         return
 
     xbmcplugin.setContent(_handle, 'videos')
 
     dprint('search(): found: ' + str(len(videos)))
-    videos.sort()
-
-    for category in videos[:int(g_max_searched_vids)]:
+    for video in videos[:int(g_max_searched_vids)]:
         #dprint('search(): found item: ' + str(category))
-        list_item = xbmcgui.ListItem(label=category[0] + category[1])
+        list_item = xbmcgui.ListItem(label=video[0] + video[1])
 
         if params is not None and len(params) > 0:
             art = params.get("art", None)
@@ -380,7 +305,7 @@ def search(name, params=None):
             if video_info is not None:
                 video_info = json.loads(video_info)
                 # video_info['title'] = category[0] + category[1]
-                video_info['title'] = category[3]
+                video_info['title'] = video[3]
                 list_item.setInfo('video', video_info)
 
         list_item.setProperty('IsPlayable', 'true')
@@ -388,18 +313,31 @@ def search(name, params=None):
             [
                 ('Vybrat stream',
                  'RunPlugin({})'.format(
-                     get_url(action="play", link=category[2], force_selector=True))
+                     get_url(action="play", link=video[2], force_selector=True))
                  ),
-                ('Kopírovat URL', 'RunPlugin({})'.format(get_url(action="copy_url", url=category[2]))),
-                ('Uložit do knihovny', 'RunPlugin({})'.format(get_url(action="library", url=category[2]))),
-                ('Stáhnout', 'RunPlugin({})'.format(get_url(action="download", url=category[2]))),
-                ('QR kód streamu', 'RunPlugin({})'.format(get_url(action="qr", url=category[2])))
+                ('Kopírovat URL', 'RunPlugin({})'.format(get_url(action="copy_url", url=video[2]))),
+                ('Uložit do knihovny', 'RunPlugin({})'.format(get_url(action="library", url=video[2]))),
+                ('Stáhnout', 'RunPlugin({})'.format(get_url(action="download", url=video[2]))),
+                ('QR kód streamu', 'RunPlugin({})'.format(get_url(action="qr", url=video[2])))
             ]
         )
-        url = get_url(action='play', link=category[2])
+        url = get_url(action='play', link=video[2])
+        dprint("search(): add item: " + video[2])
+
         xbmcplugin.addDirectoryItem(_handle, url, list_item, False)
+
+    # Add button to search variant.
+    search_var_item = xbmcgui.ListItem(label='Změnit hledaný výraz')
+    search_var_item.setProperty('IsPlayable', 'false')
+    sv_url = get_url(action='search_variant', name=name, params=params)
+    xbmcplugin.addDirectoryItem(_handle, sv_url, search_var_item, True)
+
     xbmcplugin.endOfDirectory(_handle)
 
+def search_variant(name: str, params):
+    new_search = search_variants_dialog(name)
+    if new_search is not None:
+        search(new_search, params)
 
 def menu():
     if os.path.exists(history_path):
@@ -441,7 +379,6 @@ def get_name_ext(download_url: str, content: bytes) -> Tuple[Optional[str], Opti
         # Non-premium link does looks like:
         if name_wo_ext is None:
             name_wo_ext = find_pattern(content_str, r'N.zev souboru:<\/span>\s*?<span>([^<]+?)<\/span>')
-            name_wo_ext = unquote(name_wo_ext.strip()).replace(' ', '.')
 
         # .....f5DfDqhRyiVeuZxf9gteE.mp4?token=....
         if extension is None:
@@ -453,6 +390,10 @@ def get_name_ext(download_url: str, content: bytes) -> Tuple[Optional[str], Opti
     if name_wo_ext is None:
         parsed1 = urlparse(download_url).path
         name_wo_ext = parsed1.split("/")[1]
+
+    if name_wo_ext is not None:
+        # Ensure allowed name for further use.
+        name_wo_ext = unquote(name_wo_ext).strip('. ').replace(' ', '.')
 
     return name_wo_ext, extension
 
@@ -477,13 +418,19 @@ def download_subtitles(
 
     for sub in subs:
         name_prefix = "" if use_name_as_subfolder else (name_wo_ext + "-")
-        #name_size_suffix = (name_wo_ext + "-") if use_name_as_subfolder else ""
         name_subtitles = name_prefix + sub.label + ".srt"
         us = urlopen(sub.path).read()
-        fs = open(path + name_subtitles, "wb")
-        sub_paths.append(path + name_subtitles)
+
+        abs_path = path + name_subtitles
+        fs = open(abs_path, "wb")
         fs.write(us)
         fs.close()
+
+        file_size = get_file_size_human_readable(abs_path, 0)
+        new_path = path + name_prefix + sub.label + ' (' + file_size + ')' + '.srt'
+        os.rename(abs_path, new_path)
+
+        sub_paths.append(new_path)
 
     return sub_paths
 
@@ -497,7 +444,7 @@ def delete_subtitles(
         return
 
     if use_name_as_subfolder:
-        path = path + "/" + name_wo_ext + "/"
+        path = path + "/" + name_wo_ext
 
     try:
         if all_except_name:
@@ -530,27 +477,29 @@ def download(download_url: str) -> None:
 
     content = requests.get(download_url).content
 
-    # 'N.zev souboru:</span>\s*?<span>([^<]+?)</span>'
-    # 'Velikost:</span>\s*?<span>([^<]+?)</span>'
-    # 'Form.t:</span>\s*?<span>([^<]+?)</span>'
-
     streams: Optional[List[StreamData]]
     subs: Optional[List[SubData]]
-    streams, subs = get_streams_data(content)
+    streams, subs = _provider.get_streams_data(content)
     if streams is None or len(streams) == 0:
         return
 
-    file, selected_premium = open_stream_selector(download_url, streams)
+    file, selected_premium = open_stream_selector(streams)
 
     premium, cookies = get_premium()
     # if premium == 1 or selected_premium:
     if selected_premium:
-        res = requests.get(download_url + "?do=download", cookies=cookies, allow_redirects=False)
-        file = res.headers['Location']
+        ### TODO: FIX downloading
         dprint('download(): premium file: ' + file)
+        res = requests.get(file, allow_redirects=False)
+        # res = requests.get(file, cookies=cookies, allow_redirects=False)
+        if res.headers.keys().__contains__('Location'):
+            file = res.headers['Location']
 
-    name_wo_ext: Optional[str] = None
-    extension: Optional[str] = None
+            dprint('download(): location: ' + res.headers['Location'])
+            dprint('download(): headers: ' + str(res.headers))
+
+        dprint('download(): premium file2: ' + file)
+
     name_wo_ext, extension = get_name_ext(file, content)
 
     name = (name_wo_ext if name_wo_ext is not None else "downloaded") + (
@@ -633,33 +582,12 @@ def router(paramstring):
             home()
         if params["action"] == "listing_search":
             search(params["name"], params)
+        if params["action"] == "search_variant":
+            search_variant(params["name"], params)
         elif params["action"] == "listing_history":
             history()
-        elif params["action"] == "listing_episodes":
-            tmdb_episodes(_handle, _url, params["name"], params)
-        elif params["action"] == "listing_seasons":
-            tmdb_seasons(_handle, _url, params["name"], params["type"])
-        elif params["action"] == "listing_year":
-            tmdb_year(_handle, _url, params["page"], params["type"], params["id"])
-        elif params["action"] == "listing_year_category":
-            years_category(_handle, _url, params["name"])
-        elif params["action"] == "listing_movie_category":
-            movie_category(_handle, _url)
-        elif params["action"] == "listing_serie_category":
-            serie_category(_handle, _url)
-        elif params["action"] == "listing_genre_category":
-            genres_category(_handle, _url, params["name"])
-        elif params["action"] == "listing_genre":
-            if params["type"] == 'movie':
-                tmdb_movie_genre(_handle, _url, params["page"], params["type"], params["id"])
-            else:
-                tmdb_serie_genre(_handle, _url, params["page"], params["type"], params["id"])
-        elif params["action"] == "listing_tmdb_movie":
-            tmdb_movie(_handle, _url, params["name"], params["type"])
-        elif params["action"] == "listing_tmdb_serie":
-            tmdb_serie(_handle, _url, params["name"], params["type"])
-        elif params["action"] == "search_tmdb":
-            search_tmdb(_handle, _url, params["name"], params["type"])
+        elif params["action"].__contains__("listing_") or params["action"] == "search_tmdb":
+            tmdb_router(_handle, _url, params)
         elif params["action"] == "play":
             premium, cookies = get_premium()
             if premium == 1:  ## Not necessary...
@@ -689,8 +617,8 @@ def router(paramstring):
             xbmcgui.Dialog().notification("Přehraj.to", "Uloženo", xbmcgui.NOTIFICATION_INFO, 3000, sound=False)
         elif params["action"] == "qr":
             u = requests.get(params["url"]).content
-            streams, subs = get_streams_data(u)
-            selected_file, is_premium = open_stream_selector(params["url"], streams)
+            streams, subs = _provider.get_streams_data(u)
+            selected_file = open_stream_selector(streams)
             if selected_file is None:
                 # Canceled.
                 return

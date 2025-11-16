@@ -1,20 +1,17 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <settings>
-	<category label="Vyhledávač">
+	<category label="Nastavení">
         <setting label="Počet hledaných videí" type="number" id="ls" default="50"/>
         <setting label="Maximum duplicit" type="number" id="max_duplicities" default="2"/>
+        <setting label="Výběr kvality" type="enum" id="quality_selector" values="Komprimovaná|Max|Vybrat" default="Komprimovaná"/>
         <setting label="Zkrátit název titulu odprostřed" type="bool" id="truncate_titles"/>
-        <setting label="Seřadit dle" type="enum" id="sort_type" values="Neřadit|Od největšiho|Od nejmenšího" default="Neřadit"/>
-        <setting label="Výběr kvality" type="enum" id="quality_selector" values="Komprimovaná|Max|Nechat vybrat" default="Komprimovaná"/>
-    </category>
-	<category label="Nastavení">
         <setting label="Složka pro stahování" type="folder" id="download" default =""/>
         <setting label="Složka pro knihovnu" type="folder" id="library" default =""/>
         <setting label="Povolit logování" type="bool" id="is_debug_logs_enabled" default="false"/>
 	</category>
 	<category label="Premium účet">
-    <setting label="Email" type="text" id="email" default=""/>
-    <setting label="Heslo" type="text" id="password" option="hidden" default=""/>
+        <setting label="Email" type="text" id="email" default=""/>
+        <setting label="Heslo" type="text" id="password" option="hidden" default=""/>
 	</category>
   <category label="Donate">
     <setting id="paypal" type="action" label="PayPal" option="close" action="RunScript(special://home/addons/plugin.video.bacprehrajto/donate.py)" />
